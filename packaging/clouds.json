@@ -1,0 +1,31 @@
+{
+  "version": "0.1.0",
+  "description": "k9s-style terminal UI for browsing AWS and GCP resources",
+  "homepage": "https://github.com/GITHUB_REPO/clouds",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-windows-amd64.zip",
+      "hash": "REPLACE_WITH_SHA256_OF_cloud-windows-amd64.zip",
+      "bin": [["cloud-windows-amd64.exe", "clouds"]]
+    },
+    "arm64": {
+      "url": "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-windows-arm64.zip",
+      "hash": "REPLACE_WITH_SHA256_OF_cloud-windows-arm64.zip",
+      "bin": [["cloud-windows-arm64.exe", "clouds"]]
+    }
+  },
+  "checkver": {
+    "github": "https://github.com/GITHUB_REPO/clouds"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/GITHUB_REPO/clouds/releases/download/$version/cloud-windows-amd64.zip"
+      },
+      "arm64": {
+        "url": "https://github.com/GITHUB_REPO/clouds/releases/download/$version/cloud-windows-arm64.zip"
+      }
+    }
+  }
+}

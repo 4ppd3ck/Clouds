@@ -1,0 +1,9 @@
+.DS_Store
+release/
+/clouds
+/clouds.exe
+/claim/
+packaging/icons/
+/clouds_windows_*.syso
+*_test.go
+gitadd.md
