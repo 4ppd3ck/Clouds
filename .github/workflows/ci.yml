@@ -3,6 +3,7 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -28,6 +29,30 @@ jobs:
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build ./...
           CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build ./...
       - run: go test ./...
+      - name: Build release artifacts
+        run: |
+          sudo apt-get update && sudo apt-get install -y zip
+          scripts/release.sh
+      - name: Verify artifact set
+        run: |
+          set -eu
+          for f in \
+            cloud-darwin-amd64 cloud-darwin-amd64-app.zip cloud-darwin-amd64.tar.gz \
+            cloud-darwin-arm64 cloud-darwin-arm64-app.zip cloud-darwin-arm64.tar.gz \
+            cloud-linux-amd64 cloud-linux-amd64.tar.gz \
+            cloud-linux-arm64 cloud-linux-arm64.tar.gz \
+            cloud-linux-arm cloud-linux-arm.tar.gz \
+            cloud-windows-amd64.exe cloud-windows-amd64.zip \
+            cloud-windows-arm64.exe cloud-windows-arm64.zip \
+            SHA256SUMS; do
+            test -f "release/$f" || { echo "missing release/$f"; exit 1; }
+          done
+          (cd release && sha256sum -c SHA256SUMS)
+          echo "release artifact set OK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release/
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
