@@ -114,8 +114,8 @@ func (g *GCP) requireProject(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("no GCP project: pass --project, set GOOGLE_CLOUD_PROJECT, or run on GCP")
 }
 
-// svc lazily builds and caches a Discovery API client.
-func svc[T any](g *GCP, key string, build func(context.Context, ...option.ClientOption) (T, error)) (T, error) {
+// cachedSvc lazily builds and caches a Discovery API client.
+func cachedSvc[T any](g *GCP, key string, build func(context.Context, ...option.ClientOption) (T, error)) (T, error) {
 	var zero T
 	g.mu.Lock()
 	if s, ok := g.svcs[key]; ok {
@@ -134,31 +134,31 @@ func svc[T any](g *GCP, key string, build func(context.Context, ...option.Client
 }
 
 func (g *GCP) computeSvc(ctx context.Context) (*compute.Service, error) {
-	return svc(g, "compute/v1", compute.NewService)
+	return cachedSvc(g, "compute/v1", compute.NewService)
 }
 func (g *GCP) storageSvc(ctx context.Context) (*storage.Service, error) {
-	return svc(g, "storage/v1", storage.NewService)
+	return cachedSvc(g, "storage/v1", storage.NewService)
 }
 func (g *GCP) containerSvc(ctx context.Context) (*container.Service, error) {
-	return svc(g, "container/v1", container.NewService)
+	return cachedSvc(g, "container/v1", container.NewService)
 }
 func (g *GCP) runSvc(ctx context.Context) (*runapi.APIService, error) {
-	return svc(g, "run/v1", runapi.NewService)
+	return cachedSvc(g, "run/v1", runapi.NewService)
 }
 func (g *GCP) functionsSvc(ctx context.Context) (*cloudfunctions.Service, error) {
-	return svc(g, "cloudfunctions/v2", cloudfunctions.NewService)
+	return cachedSvc(g, "cloudfunctions/v2", cloudfunctions.NewService)
 }
 func (g *GCP) bqSvc(ctx context.Context) (*bigquery.Service, error) {
-	return svc(g, "bigquery/v2", bigquery.NewService)
+	return cachedSvc(g, "bigquery/v2", bigquery.NewService)
 }
 func (g *GCP) pubsubSvc(ctx context.Context) (*pubsub.Service, error) {
-	return svc(g, "pubsub/v1", pubsub.NewService)
+	return cachedSvc(g, "pubsub/v1", pubsub.NewService)
 }
 func (g *GCP) sqlSvc(ctx context.Context) (*sqladmin.Service, error) {
-	return svc(g, "sqladmin/v1", sqladmin.NewService)
+	return cachedSvc(g, "sqladmin/v1", sqladmin.NewService)
 }
 func (g *GCP) loggingSvc(ctx context.Context) (*logging.Service, error) {
-	return svc(g, "logging/v2", logging.NewService)
+	return cachedSvc(g, "logging/v2", logging.NewService)
 }
 
 func lastSegment(s string) string { return cloud.Short(s) }
@@ -223,6 +223,9 @@ func (g *GCP) fetchGCS(ctx context.Context, opts cloud.Options) ([]cloud.Resourc
 	var out []cloud.Resource
 	if err := svc.Buckets.List(p).Pages(ctx, func(page *storage.Buckets) error {
 		for _, b := range page.Items {
+			if len(out) >= cloud.MaxRows {
+				return nil
+			}
 			created := "-"
 			if t, err := time.Parse(time.RFC3339, b.TimeCreated); err == nil {
 				created = cloud.Ago(t)
@@ -256,7 +259,7 @@ func (g *GCP) gcsObjects(ctx context.Context, bucket string) ([]cloud.Resource, 
 	var out []cloud.Resource
 	if err := svc.Objects.List(bucket).Pages(ctx, func(page *storage.Objects) error {
 		for _, o := range page.Items {
-			if len(out) >= 300 {
+			if len(out) >= cloud.MaxRows {
 				return nil
 			}
 			updated := "-"
@@ -409,6 +412,9 @@ func (g *GCP) fetchFunctions(ctx context.Context, opts cloud.Options) ([]cloud.R
 	parent := fmt.Sprintf("projects/%s/locations/-", p)
 	if err := svc.Projects.Locations.Functions.List(parent).Pages(ctx, func(page *cloudfunctions.ListFunctionsResponse) error {
 		for _, f := range page.Functions {
+			if len(out) >= cloud.MaxRows {
+				return nil
+			}
 			parts := strings.Split(f.Name, "/")
 			loc, name := "-", "-"
 			if len(parts) > 3 {
@@ -457,6 +463,9 @@ func (g *GCP) fetchBQ(ctx context.Context, opts cloud.Options) ([]cloud.Resource
 	var out []cloud.Resource
 	if err := svc.Datasets.List(p).Pages(ctx, func(page *bigquery.DatasetList) error {
 		for _, d := range page.Datasets {
+			if len(out) >= cloud.MaxRows {
+				return nil
+			}
 			ref := "-"
 			if d.DatasetReference != nil {
 				ref = d.DatasetReference.DatasetId
@@ -493,6 +502,9 @@ func (g *GCP) fetchPubSub(ctx context.Context, opts cloud.Options) ([]cloud.Reso
 	var out []cloud.Resource
 	if err := svc.Projects.Topics.List(fmt.Sprintf("projects/%s", p)).Pages(ctx, func(page *pubsub.ListTopicsResponse) error {
 		for _, t := range page.Topics {
+			if len(out) >= cloud.MaxRows {
+				return nil
+			}
 			full := t.Name
 			out = append(out, cloud.Resource{
 				Kind:    "pubsub/topic",

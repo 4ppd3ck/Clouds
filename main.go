@@ -15,15 +15,6 @@ import (
 )
 
 func main() {
-	// Undocumented: print the embedded authorship seal (ciphertext) and exit.
-	// Intercepted before flag.Parse so it never shows in -h.
-	for _, a := range os.Args[1:] {
-		if a == "--seal" {
-			fmt.Println(ui.SealBlob())
-			return
-		}
-	}
-
 	profile := flag.String("profile", "", "AWS shared-config profile (default: AWS default chain)")
 	region := flag.String("region", "", "AWS region override")
 	project := flag.String("project", "", "GCP project override")

@@ -148,9 +148,9 @@ func NewModel(opts cloud.Options, impls []providers.Impl) Model {
 }
 
 // Init implements tea.Model. State (incl. loading flag) was seeded in
-// NewModel; Init only needs to kick off the first fetch.
+// NewModel; Init kicks off the first fetch plus the topbar identity lookup.
 func (m Model) Init() tea.Cmd {
-	return m.initCmd
+	return tea.Batch(m.initCmd, headerInfoCmd(m.impls))
 }
 
 // helpers -----------------------------------------------------------------
@@ -238,7 +238,7 @@ func (m *Model) startFetch(force bool) tea.Cmd {
 	}
 	m.loading = true
 	m.loadMsg = fmt.Sprintf("loading %s …", top.serviceName)
-	return fetchCmd(top.viewID, top.fetch, m.opts)
+	return tea.Batch(fetchCmd(top.viewID, top.fetch, m.opts), spinnerCmd())
 }
 
 func fetchCmd(viewID string, f cloud.FetchFunc, opts cloud.Options) tea.Cmd {
@@ -252,6 +252,22 @@ func fetchCmd(viewID string, f cloud.FetchFunc, opts cloud.Options) tea.Cmd {
 		defer cancel()
 		res, err := f(ctx, opts)
 		return loadedMsg{viewID: viewID, res: res, err: err, elapsed: time.Since(t0)}
+	}
+}
+
+// headerInfoCmd resolves each provider's topbar identity line (AWS profile,
+// account and region; GCP project) in parallel. The lookups (STS, metadata
+// server) can take seconds, so they run as their own command and the topbar
+// fills in when the result arrives.
+func headerInfoCmd(impls []providers.Impl) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		infos := make([]string, len(impls))
+		cloud.ParallelRange(len(impls), len(impls), func(i int) {
+			infos[i] = impls[i].Info(ctx)
+		})
+		return headerInfoMsg{infos: infos}
 	}
 }
 
@@ -416,10 +432,12 @@ func (m *Model) updateList(msg tea.KeyMsg) tea.Cmd {
 		next := (m.provIdx + 1) % len(m.catalogs)
 		cat := m.catalogs[next]
 		return m.openService(cat.ID, m.lastService[cat.ID])
-	case "1":
-		return m.openService("aws", m.lastService["aws"])
-	case "2":
-		return m.openService("gcp", m.lastService["gcp"])
+	case "1", "2", "3", "4", "5":
+		if idx := int(msg.String()[0] - '1'); idx < len(m.catalogs) {
+			cat := m.catalogs[idx]
+			return m.openService(cat.ID, m.lastService[cat.ID])
+		}
+		return nil
 	default:
 		return m.forwardTable(msg)
 	}
@@ -550,10 +568,11 @@ func (m *Model) execCommand(text string) tea.Cmd {
 		m.screen = screenHelp
 		m.setViewportContent(helpContent(m.catalogs))
 		return nil
-	case "aws":
-		return m.openService("aws", m.lastService["aws"])
-	case "gcp":
-		return m.openService("gcp", m.lastService["gcp"])
+	}
+	for _, cat := range m.catalogs {
+		if cmd == cat.ID {
+			return m.openService(cat.ID, m.lastService[cat.ID])
+		}
 	}
 	if _, ok := m.catalogs[m.provIdx].Find(cmd); ok {
 		return m.openService(m.catalogs[m.provIdx].ID, cmd)

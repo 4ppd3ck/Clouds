@@ -343,7 +343,7 @@ func (a *AWS) s3Objects(ctx context.Context, bucket string) ([]cloud.Resource, e
 			return nil, err
 		}
 		for _, o := range page.Contents {
-			if len(out) >= 500 {
+			if len(out) >= cloud.MaxRows {
 				return out, nil
 			}
 			key := aws.ToString(o.Key)
