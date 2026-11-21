@@ -265,21 +265,9 @@ and the `.syso` files are build products and are gitignored.
 
 ## Releases
 
-Every push runs `go vet`, `go build` and `go test` in CI; pushing a `v*` tag
-publishes the full matrix to a GitHub Release.
-
-```bash
-git tag v0.2.0 && git push origin v0.2.0     # CI builds and publishes
-```
-
-To build the same artifact set locally:
-
-```bash
-./scripts/release.sh v0.2.0     # macOS / Linux / Git Bash
-scripts\release.bat v0.2.0      # Windows
-```
-
-Everything lands in `release/`:
+Releases are cut by the maintainer only — the release scripts are run locally
+and the artifacts are published to GitHub Releases. Everything lands in
+`release/`:
 
 | File | Runs on |
 |------|---------|
@@ -309,7 +297,7 @@ Two more details the scripts take care of on your behalf:
   real `.app` bundles with an `.icns`; Linux tarballs carry `clouds.desktop`
   plus an SVG icon, which `install.sh` installs into the applications menu.
 - **Manifests.** After a release, refresh `packaging/clouds.json` (Scoop) and
-  `packaging/clouds.rb` (Homebrew) from the new `SHA256SUMS` — the workflow is
+  `packaging/clouds.rb` (Homebrew) from the new `SHA256SUMS` — the process is
   described in [`packaging/README.md`](packaging/README.md).
 
 
@@ -340,7 +328,6 @@ Two more details the scripts take care of on your behalf:
 | `ui/clipboard.go` | Platform clipboard and browser helpers |
 | `packaging/` | Icon generation (`.png`/`.icns`/`.ico`/`.syso`) and the macOS `.app` bundler, plus Scoop/Homebrew manifests |
 | `scripts/` | `run`, `build`, `release` and the one-line installers |
-| `.github/workflows/ci.yml` | vet/build/test on every push; release on `v*` tags |
 
 Design principles, mirroring k9s:
 
