@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>clouds — a k9s-style terminal UI for AWS and GCP</title>
+<meta name="description" content="Browse AWS and GCP resources in your terminal. Single static Go binary, no runtime dependencies.">
+<style>
+  :root {
+    --bg: #0a0e12; --bg2: #0e141b; --panel: #111922; --border: rgba(255,255,255,.09);
+    --text: #d7dde3; --muted: #7d8a96; --accent: #3fd08a; --accent2: #59b8ff;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  a { color: var(--accent2); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 0 24px; }
+  header { border-bottom: 1px solid var(--border); background: var(--bg2); }
+  header .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .logo { font-family: var(--mono); font-weight: 700; font-size: 18px; color: var(--accent); }
+  nav a { color: var(--muted); margin-left: 22px; font-size: 14.5px; }
+  nav a:hover { color: var(--text); }
+  .hero { padding: 72px 0 48px; text-align: center; }
+  .hero h1 { font-family: var(--mono); font-size: 42px; letter-spacing: -1px; }
+  .hero h1 span { color: var(--accent); }
+  .hero p.tagline { font-size: 19px; color: var(--muted); margin: 16px auto 0; max-width: 640px; }
+  .badges { margin-top: 22px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .badge { font-family: var(--mono); font-size: 12.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; background: var(--panel); }
+  .badge b { color: var(--text); font-weight: 600; }
+  section { padding: 44px 0; }
+  h2 { font-size: 22px; margin-bottom: 24px; }
+  h2 .k { font-family: var(--mono); color: var(--accent); margin-right: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+  .card h3 { font-size: 15.5px; margin-bottom: 6px; color: var(--text); }
+  .card p { font-size: 14px; color: var(--muted); }
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .shots img { width: 100%; border: 1px solid var(--border); border-radius: 10px; display: block; background: #000; }
+  @media (max-width: 700px) { .shots { grid-template-columns: 1fr; } }
+  .install { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 20px; font-family: var(--mono); font-size: 14px; overflow-x: auto; white-space: pre; color: var(--text); }
+  .install .c { color: var(--muted); }
+  .install .p { color: var(--accent); }
+  .cta { display: inline-block; margin-top: 16px; background: var(--accent); color: #04140b; font-weight: 600; padding: 10px 22px; border-radius: 8px; }
+  .cta:hover { text-decoration: none; filter: brightness(1.08); }
+  footer { border-top: 1px solid var(--border); margin-top: 40px; padding: 28px 0 40px; color: var(--muted); font-size: 13.5px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="logo">$ clouds</div>
+  <nav><a href="#features">Features</a><a href="#screens">Screens</a><a href="#install">Install</a><a href="https://github.com/4ppd3ck/Clouds">GitHub</a></nav>
+</div></header>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>clouds<span>_</span></h1>
+    <p class="tagline">A k9s-style terminal UI for browsing AWS and GCP resources — one static binary, no runtime dependencies, no daemon.</p>
+    <div class="badges">
+      <span class="badge">License <b>MIT</b></span>
+      <span class="badge">Written in <b>Go</b></span>
+      <span class="badge">Platforms <b>macOS · Linux · Windows</b></span>
+      <span class="badge">Providers <b>AWS · GCP</b></span>
+    </div>
+  </div>
+
+  <section id="features">
+    <h2><span class="k">##</span>Why clouds</h2>
+    <div class="grid">
+      <div class="card"><h3>Everything is a Resource table</h3><p>Services return rows; the UI is generic. Filter, sort and drill into any service the same way.</p></div>
+      <div class="card"><h3>Drill-down is just another fetch</h3><p>Resource.Sub lazily loads children onto the nav stack — from S3 buckets straight to objects.</p></div>
+      <div class="card"><h3>API calls never block the UI</h3><p>Every fetch runs on a goroutine; stale results are dropped before they can paint.</p></div>
+      <div class="card"><h3>Regional fan-out</h3><p><code>--all-regions</code> sweeps every region for regional AWS services in parallel.</p></div>
+      <div class="card"><h3>Pluggable providers</h3><p>Adding a service means appending one <code>cloud.Service</code> to the catalog. <code>--list-services</code> prints them all.</p></div>
+      <div class="card"><h3>Works offline too</h3><p><code>--demo</code> ships built-in sample data for trying the UI with zero credentials.</p></div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <h2><span class="k">##</span>Screens</h2>
+    <div class="shots">
+      <img src="screenshot-ec2.png" alt="clouds EC2 instance table">
+      <img src="screenshot-s3-objects.png" alt="clouds S3 object listing">
+      <img src="screenshot-gke.png" alt="clouds GKE clusters view">
+      <img src="screenshot-help.png" alt="clouds help overlay">
+    </div>
+  </section>
+
+  <section id="install">
+    <h2><span class="k">##</span>Install</h2>
+    <div class="install"><span class="c"># macOS / Linux / Git Bash</span>
+curl -fsSL https://raw.githubusercontent.com/4ppd3ck/Clouds/main/scripts/install.sh | bash
+
+<span class="c"># Windows (PowerShell)</span>
+irm https://raw.githubusercontent.com/4ppd3ck/Clouds/main/scripts/install.ps1 | iex</div>
+    <p style="margin-top:14px;color:var(--muted);font-size:14px">Or grab a zip from <a href="https://github.com/4ppd3ck/Clouds/releases">Releases</a> and verify with <code>sha256sum -c SHA256SUMS</code>. Homebrew and Scoop manifests live in <a href="https://github.com/4ppd3ck/Clouds/tree/main/packaging">packaging/</a>.</p>
+    <a class="cta" href="https://github.com/4ppd3ck/Clouds/releases">Download from Releases</a>
+  </section>
+</div>
+
+<footer><div class="wrap">
+  <div>MIT licensed · © 2026 Manohar Guri (4ppd3ck)</div>
+  <div>Part of the suite: <a href="https://4ppd3ck.github.io/clouds/">Clouds</a> · <a href="https://4ppd3ck.github.io/chandler/">Chandler</a> · <a href="https://4ppd3ck.github.io/appdeck/">AppDeck</a></div>
+</div></footer>
+</body>
+</html>
