@@ -1,12 +1,17 @@
 package ui
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
 // Version is printed by --version and shown in the topbar. It is a var so
 // release builds can stamp it via -ldflags "-X clouds/ui.Version=...".
 var Version = "0.1.0"
+
+// VersionLabel returns the version with exactly one leading v.
+func VersionLabel() string { return "v" + strings.TrimLeft(Version, "v") }
 
 // Commit and Date are stamped by release builds ("-X clouds/ui.Commit=...");
 // empty in dev builds, in which case --version omits them.

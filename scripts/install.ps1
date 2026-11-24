@@ -54,6 +54,30 @@ Remove-Item (Join-Path $dir "$base.exe") -Force
 
 & (Join-Path $dir 'clouds.exe') --version
 Write-Host "installed -> $dir\clouds.exe"
-if (($env:Path -split ';') -notcontains $dir) {
-  Write-Host "add to PATH (one time):  [Environment]::SetEnvironmentVariable('Path', `$env:Path + `";$dir`", 'User')"
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$pathEntries = @($userPath -split ';' | Where-Object { $_.Trim() })
+$normalizedDir = [IO.Path]::GetFullPath($dir).TrimEnd('\')
+$alreadyPresent = $false
+foreach ($entry in $pathEntries) {
+  try {
+    if ([IO.Path]::GetFullPath($entry.Trim()).TrimEnd('\').Equals(
+        $normalizedDir, [StringComparison]::OrdinalIgnoreCase)) {
+      $alreadyPresent = $true
+      break
+    }
+  } catch {
+    # Preserve unusual existing PATH entries; they should not block install.
+  }
+}
+if (-not $alreadyPresent) {
+  $newUserPath = (@($pathEntries) + $dir) -join ';'
+  [Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
+  Write-Host "added $dir to your user PATH"
+} else {
+  Write-Host "$dir is already on your user PATH"
+}
+# Make `clouds` usable in this PowerShell session too. New terminals inherit
+# the saved user PATH automatically.
+if (($env:Path -split ';' | ForEach-Object { $_.TrimEnd('\') }) -notcontains $normalizedDir) {
+  $env:Path = "$dir;$env:Path"
 }

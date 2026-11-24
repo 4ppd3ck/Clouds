@@ -57,7 +57,10 @@ irm https://raw.githubusercontent.com/GITHUB_REPO/clouds/main/scripts/install.ps
 
 Both installers read the newest release from GitHub unless you pin one. On
 Linux the installer also installs a desktop entry, so `clouds` shows up in the
-applications menu (skip with `CLOUDS_NO_DESKTOP=1`).
+applications menu (skip with `CLOUDS_NO_DESKTOP=1`). The shell installer adds
+`~/.local/bin` to your zsh or bash startup files when needed, so you can
+run `clouds` directly from Terminal. If you exported credentials in the
+current shell, run `clouds` there instead of opening the `.app` from Finder.
 
 | Variable | Effect |
 |----------|--------|
@@ -93,6 +96,8 @@ clouds --version
 | `esc` / `q` | back — `q` at the top level quits |
 | `p` | toggle provider (aws ⇄ gcp) |
 | `1` / `2` | jump straight to aws / gcp |
+| `c` | open Connect/Auth to see each provider's connection state and recovery steps |
+| `o` | change the persistent download folder |
 | `r` | refresh the current view |
 | `d` | open the selected resource in the web console |
 | `g` | download the selected S3/GCS object (folder markers: recursive) |
@@ -230,6 +235,17 @@ afterwards, so the result is deterministic despite the parallel fan-out.
 every run. AWS identity is resolved once at start-up
 (`sts:GetCallerIdentity`) and shown in the top bar as
 `profile=… account=… region=…`; with `--all-regions` the region reads `all`.
+Press `c` (or enter `:auth`) for both providers' setup state and recovery
+commands. AWS SSO profiles can be refreshed with `aws sso login --profile NAME`;
+GCP ADC is created with `gcloud auth application-default login`. Clouds never
+prompts for or stores secret keys. After changing exported environment
+variables, run `clouds` directly from that same terminal; a Finder-launched
+macOS app or another Terminal window will not inherit those temporary values.
+
+Press `o` (or enter `:download-dir`) to change the default folder used by `g`.
+The new path is saved to the Clouds config file and takes effect immediately;
+press `Ctrl+U` to clear the field and restore `~/Downloads/clouds`. The
+`--download-dir` flag still overrides the saved value for that launch.
 
 ## Building from source
 
@@ -265,24 +281,26 @@ and the `.syso` files are build products and are gitignored.
 
 ## Releases
 
-Releases are cut by the maintainer only — the release scripts are run locally
-and the artifacts are published to GitHub Releases. Everything lands in
-`release/`:
+Releases are cut by the maintainer only — run `./release.sh` (or
+`release.bat` on Windows with Git Bash installed), then publish the ZIP
+packages and checksum file from `release/`:
 
 | File | Runs on |
 |------|---------|
-| `cloud-darwin-amd64`, `cloud-darwin-arm64` | Intel and Apple Silicon Macs |
-| `cloud-darwin-*-app.zip` | macOS `.app` bundles (icon + Info.plist); unsigned, so right-click → *Open* the first time |
-| `cloud-linux-amd64`, `cloud-linux-arm64` | 64-bit x86 and ARM64 Linux |
-| `cloud-linux-arm` | 32-bit ARM Linux (Raspberry Pi 2/3/4) |
-| `cloud-windows-amd64.exe`, `cloud-windows-arm64.exe` | x64 and ARM64 Windows, with the app icon embedded |
-| `cloud-<os>-<arch>.tar.gz` / `.zip` | Compressed siblings for distribution (Go binaries shrink ~65–70%) |
-| `SHA256SUMS` | Checksums covering the binaries and the archives |
+| `cloud-darwin-amd64.zip`, `cloud-darwin-arm64.zip` | macOS `.app` bundles with an icon, Terminal launcher and local CLI installer; unsigned downloads may need Control-click → Open once |
+| `cloud-linux-<arch>.zip` | Linux binary, local installer, desktop entry and SVG icon |
+| `cloud-windows-<arch>.zip` | Windows executable, icon and local PowerShell installer |
+| `SHA256SUMS` | Checksums for all ZIP packages |
 
 Every binary is stamped with the version, commit and build date, so
 `clouds --version` reports e.g. `clouds v0.2.0 (a1b2c3d, built 2026-09-25)`.
 With no version argument the release scripts take the newest `v*` git tag,
 falling back to the `0.1.0` baked into `ui/styles.go`.
+
+Each platform ZIP also contains a local installer. After extracting a ZIP,
+run `bash install.sh` on macOS or Linux, or `./install.ps1` in PowerShell on
+Windows. This installs the CLI into your user command path; open a new terminal
+afterward. The macOS ZIP still includes `clouds.app` for launching the UI.
 
 Verify a downloaded release the same way the installers do:
 
@@ -292,9 +310,10 @@ sha256sum -c SHA256SUMS    # or: shasum -a 256 -c SHA256SUMS
 
 Two more details the scripts take care of on your behalf:
 
-- **Desktop integration.** They regenerate the icon set, `clouds.ico` and the
-  per-architecture `.syso` objects first (`go run ./packaging …`). macOS gets
-  real `.app` bundles with an `.icns`; Linux tarballs carry `clouds.desktop`
+- **Desktop integration.** The release script regenerates the icon set,
+  `clouds.ico` and the per-architecture `.syso` objects first
+  (`go run ./packaging …`). macOS gets real `.app` bundles with an `.icns`;
+  Linux packages carry `clouds.desktop`
   plus an SVG icon, which `install.sh` installs into the applications menu.
 - **Manifests.** After a release, refresh `packaging/clouds.json` (Scoop) and
   `packaging/clouds.rb` (Homebrew) from the new `SHA256SUMS` — the process is
@@ -327,7 +346,8 @@ Two more details the scripts take care of on your behalf:
 | `ui/styles.go` | lipgloss theme, provider accents, version variables |
 | `ui/clipboard.go` | Platform clipboard and browser helpers |
 | `packaging/` | Icon generation (`.png`/`.icns`/`.ico`/`.syso`) and the macOS `.app` bundler, plus Scoop/Homebrew manifests |
-| `scripts/` | `run`, `build`, `release` and the one-line installers |
+| `release.sh`, `release.bat` | Cross-platform release packaging; the batch file delegates to the shell script |
+| `scripts/` | `run`, `build` and one-line installers |
 
 Design principles, mirroring k9s:
 
@@ -338,11 +358,8 @@ Design principles, mirroring k9s:
 
 ## Roadmap
 
-- SSH/SSM into EC2 and `gcloud compute ssh` from the resource view
-- Log tailing (live follow) for CloudWatch and Cloud Logging
-- Resource mutations (start/stop EC2, restart Cloud Run)
-- An Azure provider
-- Saved views and bookmarks, YAML export
+See [`ROADMAP.md`](ROADMAP.md) for planned features, release follow-up, and
+recently completed work.
 
 ## Related
 

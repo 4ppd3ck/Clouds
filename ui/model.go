@@ -6,6 +6,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,6 +33,7 @@ const (
 	screenList screen = iota
 	screenDetail
 	screenHelp
+	screenAuth
 )
 
 type mode int
@@ -39,6 +42,7 @@ const (
 	modeNormal mode = iota
 	modeCommand
 	modeFilter
+	modeDownloadDir
 )
 
 type viewState struct {
@@ -62,7 +66,7 @@ type loadedMsg struct {
 }
 
 type headerInfoMsg struct {
-	infos []string
+	connections []providers.ConnectionInfo
 }
 
 type statusMsg struct {
@@ -119,25 +123,27 @@ type Model struct {
 	loadMsg   string
 	spinIdx   int
 
-	cloudInfo   []string
-	lastService map[string]string
-	cache       map[string]cachedView
-	opts        cloud.Options
-	initCmd     tea.Cmd
+	connections    []providers.ConnectionInfo
+	providerErrors map[string]providerFailure
+	lastService    map[string]string
+	cache          map[string]cachedView
+	opts           cloud.Options
+	initCmd        tea.Cmd
 }
 
 // NewModel builds the model; providers must already be resolved.
 func NewModel(opts cloud.Options, impls []providers.Impl) Model {
 	m := Model{
-		opts:        opts,
-		impls:       impls,
-		lastService: map[string]string{"aws": "ec2", "gcp": "gce"},
-		cache:       make(map[string]cachedView),
-		status:      "starting…",
+		opts:           opts,
+		impls:          impls,
+		lastService:    map[string]string{"aws": "ec2", "gcp": "gce"},
+		cache:          make(map[string]cachedView),
+		providerErrors: make(map[string]providerFailure),
+		status:         "starting…",
 	}
 	for _, impl := range impls {
 		m.catalogs = append(m.catalogs, impl.Catalog())
-		m.cloudInfo = append(m.cloudInfo, "")
+		m.connections = append(m.connections, providers.ConnectionInfo{Provider: impl.ID(), State: "checking", Summary: "checking credentials…"})
 	}
 	ti := textinput.New()
 	ti.CharLimit = 120
@@ -150,7 +156,7 @@ func NewModel(opts cloud.Options, impls []providers.Impl) Model {
 // Init implements tea.Model. State (incl. loading flag) was seeded in
 // NewModel; Init kicks off the first fetch plus the topbar identity lookup.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.initCmd, headerInfoCmd(m.impls))
+	return tea.Batch(m.initCmd, connectionCheckCmd(m.impls))
 }
 
 // helpers -----------------------------------------------------------------
@@ -191,7 +197,7 @@ func (m *Model) openService(providerID, token string) tea.Cmd {
 		m.mode = modeNormal
 		m.stack = []*viewState{{
 			viewID:      providerID + "/" + svc.ID,
-			title:       providerID + "/" + svc.ID,
+			title:       svc.Name,
 			serviceName: svc.Name,
 			fetch:       svc.Fetch,
 			sortKey:     "NAME",
@@ -212,7 +218,7 @@ func (m *Model) drillDown(r cloud.Resource) tea.Cmd {
 	}
 	m.stack = append(m.stack, &viewState{
 		viewID:      top.viewID + "/" + id,
-		title:       top.title + "/" + cloud.Trunc(r.Name, 24),
+		title:       top.title + " › " + cloud.Trunc(r.Name, 24),
 		serviceName: top.serviceName,
 		fetch:       cloud.FetchFunc(r.Sub),
 		sortKey:     "NAME",
@@ -255,20 +261,28 @@ func fetchCmd(viewID string, f cloud.FetchFunc, opts cloud.Options) tea.Cmd {
 	}
 }
 
-// headerInfoCmd resolves each provider's topbar identity line (AWS profile,
-// account and region; GCP project) in parallel. The lookups (STS, metadata
-// server) can take seconds, so they run as their own command and the topbar
-// fills in when the result arrives.
-func headerInfoCmd(impls []providers.Impl) tea.Cmd {
+// connectionCheckCmd resolves provider readiness in parallel.
+func connectionCheckCmd(impls []providers.Impl) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		infos := make([]string, len(impls))
+		connections := make([]providers.ConnectionInfo, len(impls))
 		cloud.ParallelRange(len(impls), len(impls), func(i int) {
-			infos[i] = impls[i].Info(ctx)
+			connections[i] = impls[i].CheckConnection(ctx)
 		})
-		return headerInfoMsg{infos: infos}
+		return headerInfoMsg{connections: connections}
 	}
+}
+
+func (m *Model) checkConnections() tea.Cmd {
+	for i := range m.connections {
+		m.connections[i].State = "checking"
+		m.connections[i].Summary = "checking credentials…"
+	}
+	if m.screen == screenAuth {
+		m.setViewportContent(authContent(m.connections, m.providerErrors, m.opts))
+	}
+	return connectionCheckCmd(m.impls)
 }
 
 // Update --------------------------------------------------------------------
@@ -292,17 +306,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rows = nil
 			delete(m.cache, msg.viewID)
 			m.rebuildTable()
-			m.setStat(fmt.Sprintf("error: %v", msg.err), true)
+			providerID := strings.SplitN(msg.viewID, "/", 2)[0]
+			m.providerErrors[providerID] = explainProviderFailure(providerID, msg.err, m.opts)
+			m.setStat(fmt.Sprintf("%s %s failed · press c for help, r to retry", strings.ToUpper(providerID), top.serviceName), true)
+			if m.screen == screenAuth {
+				m.setViewportContent(authContent(m.connections, m.providerErrors, m.opts))
+			}
 			return m, nil
 		}
+		providerID := strings.SplitN(msg.viewID, "/", 2)[0]
+		delete(m.providerErrors, providerID)
 		top.resources = msg.res
 		m.cache[msg.viewID] = cachedView{res: msg.res, at: time.Now()}
 		m.rebuildTable()
 		m.setStat(fmt.Sprintf("loaded %d %s in %.1fs", len(m.rows), top.serviceName, msg.elapsed.Seconds()), false)
+		if m.screen == screenAuth {
+			m.setViewportContent(authContent(m.connections, m.providerErrors, m.opts))
+		}
 		return m, nil
 
 	case headerInfoMsg:
-		copy(m.cloudInfo, msg.infos)
+		copy(m.connections, msg.connections)
+		if len(m.providerErrors) == 0 {
+			m.setStat("connection check complete · c for setup and recovery", false)
+		}
+		if m.screen == screenAuth {
+			m.setViewportContent(authContent(m.connections, m.providerErrors, m.opts))
+		}
 		return m, nil
 
 	case statusMsg:
@@ -346,6 +376,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.updateDetail(msg)
 		case screenHelp:
 			return m, m.updateHelp(msg)
+		case screenAuth:
+			return m, m.updateAuth(msg)
 		}
 		return m, m.updateList(msg)
 	}
@@ -395,6 +427,18 @@ func (m *Model) updateList(msg tea.KeyMsg) tea.Cmd {
 		m.screen = screenHelp
 		m.setViewportContent(helpContent(m.catalogs))
 		return nil
+	case "c":
+		m.screen = screenAuth
+		m.setViewportContent(authContent(m.connections, m.providerErrors, m.opts))
+		m.setStat("checking provider connections…", false)
+		return m.checkConnections()
+	case "o":
+		m.screen = screenList
+		m.mode = modeDownloadDir
+		m.input.Prompt = "download folder (ctrl+u clears): "
+		m.input.Placeholder = "~/Downloads/clouds"
+		m.input.SetValue(m.downloadDirValue())
+		return m.input.Focus()
 	case "enter":
 		r, ok := m.selected()
 		if !ok {
@@ -460,7 +504,7 @@ func (m *Model) openDetail(r cloud.Resource) tea.Cmd {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", r.Name)
 	fmt.Fprintf(&b, "%s\n", r.Kind)
-	meta := strings.Join(nonEmpty("id: "+r.ID, "region: "+r.Region), "  ·  ")
+	meta := strings.Join(nonEmpty(strings.ToLower(identityColumn(r.Kind))+": "+r.ID, "region: "+r.Region), "  ·  ")
 	if meta != "" {
 		fmt.Fprintf(&b, "%s\n", meta)
 	}
@@ -516,10 +560,76 @@ func (m *Model) updateHelp(msg tea.KeyMsg) tea.Cmd {
 	}
 }
 
+func (m *Model) updateAuth(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+c":
+		return tea.Quit
+	case "esc", "q":
+		m.screen = screenList
+		return nil
+	case "r":
+		m.setStat("rechecking provider connections…", false)
+		return m.checkConnections()
+	default:
+		return m.forwardViewport(msg)
+	}
+}
+
+func (m *Model) downloadDirValue() string {
+	if m.opts.DownloadDir != "" {
+		return m.opts.DownloadDir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join("Downloads", "clouds")
+	}
+	return filepath.Join(home, "Downloads", "clouds")
+}
+
+func (m *Model) saveDownloadDir(value string) tea.Cmd {
+	path := strings.TrimSpace(value)
+	if path == "~" || (len(path) > 1 && path[0] == '~' && (path[1] == '/' || path[1] == '\\')) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			m.setStat(fmt.Sprintf("could not resolve home directory: %v", err), true)
+			return nil
+		}
+		if path == "~" {
+			path = home
+		} else {
+			path = filepath.Join(home, strings.TrimLeft(path[1:], `/\\`))
+		}
+	}
+	if path != "" {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			m.setStat(fmt.Sprintf("invalid download directory: %v", err), true)
+			return nil
+		}
+		path = filepath.Clean(abs)
+	}
+	if err := cloud.SaveDownloadDir(path, m.opts.ConfigPath); err != nil {
+		m.setStat(fmt.Sprintf("could not save download directory: %v", err), true)
+		return nil
+	}
+	m.opts.DownloadDir = path
+	if path == "" {
+		m.setStat("download folder reset to ~/Downloads/clouds", false)
+	} else {
+		m.setStat("download folder set to "+path, false)
+	}
+	return nil
+}
+
 func (m *Model) updateInput(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+c":
 		return tea.Quit
+	case "ctrl+u":
+		if m.mode == modeDownloadDir {
+			m.input.SetValue("")
+			return nil
+		}
 	case "esc":
 		wasFilter := m.mode == modeFilter
 		m.mode = modeNormal
@@ -534,6 +644,7 @@ func (m *Model) updateInput(msg tea.KeyMsg) tea.Cmd {
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		wasFilter := m.mode == modeFilter
+		wasDownloadDir := m.mode == modeDownloadDir
 		m.mode = modeNormal
 		m.input.Blur()
 		if wasFilter {
@@ -542,6 +653,9 @@ func (m *Model) updateInput(msg tea.KeyMsg) tea.Cmd {
 			}
 			m.rebuildTable()
 			return nil
+		}
+		if wasDownloadDir {
+			return m.saveDownloadDir(text)
 		}
 		return m.execCommand(text)
 	}
@@ -568,6 +682,16 @@ func (m *Model) execCommand(text string) tea.Cmd {
 		m.screen = screenHelp
 		m.setViewportContent(helpContent(m.catalogs))
 		return nil
+	case "auth", "connect":
+		m.screen = screenAuth
+		m.setViewportContent(authContent(m.connections, m.providerErrors, m.opts))
+		return m.checkConnections()
+	case "download-dir", "output":
+		m.mode = modeDownloadDir
+		m.input.Prompt = "download folder (ctrl+u clears): "
+		m.input.Placeholder = "~/Downloads/clouds"
+		m.input.SetValue(m.downloadDirValue())
+		return m.input.Focus()
 	}
 	for _, cat := range m.catalogs {
 		if cmd == cat.ID {
@@ -701,8 +825,12 @@ func (m *Model) rebuildTable() {
 	height = clamp(height, 3, 200)
 
 	keys := unionKeys(rows, 6)
+	idTitle := "ID"
+	if len(rows) > 0 {
+		idTitle = identityColumn(rows[0].Kind)
+	}
 	tr := table.New(
-		table.WithColumns(columnsFor(keys, m.width)),
+		table.WithColumns(columnsFor(keys, m.width, idTitle)),
 		table.WithRows(rowsFor(rows, keys)),
 		table.WithFocused(true),
 		table.WithHeight(height),
@@ -714,10 +842,7 @@ func (m *Model) rebuildTable() {
 
 func unionKeys(rows []cloud.Resource, cap int) []string {
 	keys := make([]string, 0, cap)
-	for i, r := range rows {
-		if i >= 20 {
-			break
-		}
+	for _, r := range rows {
 		for _, f := range r.Fields {
 			if len(keys) >= cap {
 				return keys
@@ -730,7 +855,7 @@ func unionKeys(rows []cloud.Resource, cap int) []string {
 	return keys
 }
 
-func columnsFor(keys []string, total int) []table.Column {
+func columnsFor(keys []string, total int, idTitle string) []table.Column {
 	nameW := clamp(total*2/5, 12, 36)
 	idW := clamp(total/4, 10, 30)
 	rest := total - nameW - idW - len(keys)*2
@@ -738,11 +863,18 @@ func columnsFor(keys []string, total int) []table.Column {
 	if len(keys) > 0 {
 		extraW = clamp(rest/len(keys), 8, 28)
 	}
-	cols := []table.Column{{Title: "NAME", Width: nameW}, {Title: "ID", Width: idW}}
+	cols := []table.Column{{Title: "NAME", Width: nameW}, {Title: idTitle, Width: idW}}
 	for _, k := range keys {
 		cols = append(cols, table.Column{Title: k, Width: extraW})
 	}
 	return cols
+}
+
+func identityColumn(kind string) string {
+	if strings.HasSuffix(kind, "/object") {
+		return "SIZE"
+	}
+	return "ID"
 }
 
 func rowsFor(rows []cloud.Resource, keys []string) []table.Row {
@@ -779,6 +911,8 @@ func (m Model) View() string {
 		return m.detailView()
 	case screenHelp:
 		return m.helpView()
+	case screenAuth:
+		return m.authView()
 	}
 	return m.listView()
 }
@@ -796,7 +930,7 @@ func (m Model) listView() string {
 
 func (m Model) topbarView(accent lipgloss.Color) string {
 	accentStyle := lipgloss.NewStyle().Bold(true).Foreground(accent)
-	l1 := accentStyle.Render(fmt.Sprintf(" ☁ clouds v%s", Version)) + dimStyle.Render("  ")
+	l1 := accentStyle.Render(" ☁ clouds "+VersionLabel()) + dimStyle.Render("  ")
 	for i, cat := range m.catalogs {
 		c := accentFor(cat.ID)
 		if i == m.provIdx {
@@ -804,8 +938,13 @@ func (m Model) topbarView(accent lipgloss.Color) string {
 		} else {
 			l1 += dimStyle.Foreground(c).Render("○ " + cat.ID)
 		}
-		if m.cloudInfo[i] != "" {
-			l1 += dimStyle.Render("  " + m.cloudInfo[i] + " ")
+		if i < len(m.connections) {
+			conn := m.connections[i]
+			l1 += dimStyle.Render("  ") + connectionBadge(conn)
+			if conn.Summary != "" {
+				l1 += dimStyle.Render(" " + compactConnectionSummary(conn))
+			}
+			l1 += dimStyle.Render(" ")
 		}
 	}
 	vs := m.top()
@@ -845,7 +984,10 @@ func (m Model) bottomView() string {
 	} else if m.statusErr {
 		style = errStyle
 	}
-	hints := ":cmd /filter ⏎detail s sort g download d console y copy r refresh p provider ? help q quit"
+	hints := "enter detail · g download · c auth · o folder · r refresh · p cloud · ? help · q quit"
+	if m.screen == screenAuth {
+		hints = "r recheck connections · esc return · ↑/↓ scroll"
+	}
 	return style.Render(" "+msg+" ") + dimStyle.Render("│ "+hints)
 }
 
@@ -861,11 +1003,41 @@ func (m Model) helpView() string {
 	accent := accentFor(m.catalogs[m.provIdx].ID)
 	rule := lipgloss.NewStyle().Foreground(accent).Render(strings.Repeat("─", m.width))
 	return lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf(" clouds v%s — help (esc to go back)", Version)),
+		lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf(" clouds %s — help (esc to go back)", VersionLabel())),
 		rule,
 		m.viewport.View(),
 		m.bottomView(),
 	)
+}
+
+func (m Model) authView() string {
+	accent := accentFor("aws")
+	rule := lipgloss.NewStyle().Foreground(accent).Render(strings.Repeat("─", m.width))
+	return lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().Bold(true).Foreground(accent).Render(" CONNECT / AUTH  (esc to return)"),
+		rule,
+		m.viewport.View(),
+		m.bottomView(),
+	)
+}
+
+func connectionBadge(conn providers.ConnectionInfo) string {
+	label := strings.ToUpper(conn.Provider) + " "
+	style := dimStyle
+	switch conn.State {
+	case "ready":
+		label += "✓"
+		style = okStyle
+	case "warning":
+		label += "!"
+		style = filterStyle
+	case "setup":
+		label += "setup"
+		style = errStyle
+	case "demo":
+		label += "demo"
+	}
+	return style.Render(label)
 }
 
 func (m *Model) setViewportContent(s string) {

@@ -35,23 +35,23 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "downloading $base.tar.gz from $REPO ($VERSION)"
-curl -fL --progress-bar -o "$tmp/$base.tar.gz" "$url/$base.tar.gz"
+echo "downloading $base.zip from $REPO ($VERSION)"
+curl -fL --progress-bar -o "$tmp/$base.zip" "$url/$base.zip"
 
 # Checksums when published. Only "release ships no SHA256SUMS" (HTTP 404)
 # skips verification; a failed request or a sums file without an entry for
 # this artifact is fatal, never a silent pass.
 code=$(curl -Ls -o "$tmp/SHA256SUMS" -w '%{http_code}' "$url/SHA256SUMS") || true
 if [ "$code" = 200 ]; then
-  want=$(grep " $base.tar.gz\$" "$tmp/SHA256SUMS" | awk '{print $1}') || true
+  want=$(grep " $base.zip\$" "$tmp/SHA256SUMS" | awk '{print $1}') || true
   if [ -z "$want" ]; then
-    echo "error: SHA256SUMS has no entry for $base.tar.gz — refusing to install" >&2
+    echo "error: SHA256SUMS has no entry for $base.zip — refusing to install" >&2
     exit 1
   fi
   if command -v sha256sum >/dev/null 2>&1; then
-    got=$(sha256sum "$tmp/$base.tar.gz" | awk '{print $1}')
+    got=$(sha256sum "$tmp/$base.zip" | awk '{print $1}')
   else
-    got=$(shasum -a 256 "$tmp/$base.tar.gz" | awk '{print $1}')
+    got=$(shasum -a 256 "$tmp/$base.zip" | awk '{print $1}')
   fi
   if [ "$got" != "$want" ]; then
     echo "checksum mismatch: expected $want, got $got" >&2
@@ -66,24 +66,57 @@ else
 fi
 
 mkdir -p "$bin_dir"
-tar -xzf "$tmp/$base.tar.gz" -C "$tmp"
-install -m 0755 "$tmp/$base" "$bin_dir/clouds"
+unzip -q "$tmp/$base.zip" -d "$tmp/extracted"
+binary="$tmp/extracted/clouds"
+[ "$os" != darwin ] || binary="$tmp/extracted/clouds.app/Contents/Resources/clouds"
+install -m 0755 "$binary" "$bin_dir/clouds"
 
 # Desktop entry (Linux only, when the release ships one; opt out with
 # CLOUDS_NO_DESKTOP=1).
-if [ "$os" = linux ] && [ -f "$tmp/clouds.desktop" ] && [ -z "${CLOUDS_NO_DESKTOP:-}" ]; then
+if [ "$os" = linux ] && [ -f "$tmp/extracted/clouds.desktop" ] && [ -z "${CLOUDS_NO_DESKTOP:-}" ]; then
   xdg="${XDG_DATA_HOME:-$HOME/.local/share}"
   install -d -m 0755 "$xdg/applications" "$xdg/icons/hicolor/scalable/apps"
-  install -m 0644 "$tmp/clouds.desktop" "$xdg/applications/clouds.desktop"
-  if [ -f "$tmp/clouds.svg" ]; then
-    install -m 0644 "$tmp/clouds.svg" "$xdg/icons/hicolor/scalable/apps/clouds.svg"
+  install -m 0644 "$tmp/extracted/clouds.desktop" "$xdg/applications/clouds.desktop"
+  if [ -f "$tmp/extracted/clouds.svg" ]; then
+    install -m 0644 "$tmp/extracted/clouds.svg" "$xdg/icons/hicolor/scalable/apps/clouds.svg"
   fi
   echo "desktop entry installed (applications menu → clouds)"
 fi
 
 case ":$PATH:" in
   *":$bin_dir:"*) ;;
-  *) echo "note: $bin_dir is not on your PATH — add it with: export PATH=\"$bin_dir:\$PATH\"" ;;
+  *)
+    path_files=()
+    if [ "$bin_dir" = "$HOME/.local/bin" ]; then
+      case "${SHELL##*/}" in
+        zsh) path_files=("$HOME/.zshrc") ;;
+        bash)
+          # Interactive non-login shells read .bashrc; login shells read
+          # .bash_profile (macOS) or .profile (many Linux distributions).
+          path_files=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
+          ;;
+      esac
+    fi
+    if [ "${#path_files[@]}" -gt 0 ]; then
+      for path_file in "${path_files[@]}"; do
+        if ! grep -Fq '# clouds: add install directory to PATH' "$path_file" 2>/dev/null; then
+          mkdir -p "$(dirname "$path_file")"
+          cat >> "$path_file" <<'SHELL_PATH'
+
+# clouds: add install directory to PATH
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+SHELL_PATH
+        fi
+        echo "added $bin_dir to $path_file"
+      done
+      echo "open a new terminal, or source the appropriate file to use clouds now"
+    else
+      echo "note: $bin_dir is not on your PATH — add it with: export PATH=\"$bin_dir:\$PATH\""
+    fi
+    ;;
 esac
 
 "$bin_dir/clouds" --version

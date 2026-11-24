@@ -233,10 +233,36 @@ func appBundle(args []string) error {
 	if err := addFile("clouds.app/Contents/Info.plist", 0o644, []byte(plist)); err != nil {
 		return err
 	}
-	if err := addFile("clouds.app/Contents/MacOS/clouds", 0o755, bin); err != nil {
+	launcher := []byte(`#!/bin/sh
+set -eu
+here="$(cd "$(dirname "$0")" && pwd -P)"
+exec /usr/bin/open -a Terminal "$here/../Resources/clouds.command"
+`)
+	command := []byte(`#!/bin/sh
+here="$(cd "$(dirname "$0")" && pwd -P)"
+exec "$here/clouds"
+`)
+	if err := addFile("clouds.app/Contents/MacOS/clouds", 0o755, launcher); err != nil {
+		return err
+	}
+	if err := addFile("clouds.app/Contents/Resources/clouds", 0o755, bin); err != nil {
+		return err
+	}
+	if err := addFile("clouds.app/Contents/Resources/clouds.command", 0o755, command); err != nil {
+		return err
+	}
+	readme := []byte("clouds runs in Terminal because it is a full-screen terminal app.\n\nTo use credentials exported in an existing shell, run `clouds` directly in that Terminal after installing the CLI, or run this bundled binary by its full path. Finder-launched apps do not inherit another shell's environment.\n\nIf macOS blocks this unsigned download, Control-click clouds.app in Applications, choose Open, then confirm Open once.\n")
+	if err := addFile("clouds.app/Contents/Resources/README.txt", 0o644, readme); err != nil {
 		return err
 	}
 	if err := addFile("clouds.app/Contents/Resources/AppIcon.icns", 0o644, icns); err != nil {
+		return err
+	}
+	localInstaller, err := os.ReadFile("scripts/install-local.sh")
+	if err != nil {
+		return err
+	}
+	if err := addFile("install.sh", 0o755, localInstaller); err != nil {
 		return err
 	}
 	if err := zw.Close(); err != nil {

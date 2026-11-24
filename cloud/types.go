@@ -22,6 +22,7 @@ type Options struct {
 	Profile     string // AWS shared-config profile ("" -> default chain)
 	Region      string // AWS region override
 	Project     string // GCP project ("" -> env / metadata)
+	ConfigPath  string // optional explicit Clouds config path
 	DownloadDir string // where `g` downloads go ("" -> ~/Downloads/clouds)
 	Demo        bool   // browse built-in sample data (no credentials)
 	AllRegions  bool   // AWS: scan every enabled region, not just the configured one

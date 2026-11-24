@@ -27,7 +27,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("clouds %s", ui.Version)
+		fmt.Printf("clouds %s", ui.VersionLabel())
 		if ui.Commit != "" {
 			fmt.Printf(" (%s, built %s)", ui.Commit, ui.Date)
 		}
@@ -65,6 +65,7 @@ func main() {
 		Profile:     strOpt(*profile, fileCfg.Profile),
 		Region:      strOpt(*region, fileCfg.Region),
 		Project:     strOpt(*project, fileCfg.Project),
+		ConfigPath:  *configPath,
 		DownloadDir: strOpt(*downloadDir, fileCfg.DownloadDir),
 		Demo:        boolOpt("demo", *demo, fileCfg.Demo),
 		AllRegions:  boolOpt("all-regions", *allRegions, fileCfg.AllRegions),
@@ -87,7 +88,9 @@ func main() {
 		return
 	}
 
-	p := tea.NewProgram(ui.NewModel(opts, impls), tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Leave mouse reporting disabled so terminal emulators can use the mouse
+	// for native text selection and copy while the TUI is showing details.
+	p := tea.NewProgram(ui.NewModel(opts, impls), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "clouds:", err)
 		os.Exit(1)

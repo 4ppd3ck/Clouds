@@ -13,28 +13,32 @@ class Clouds < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-darwin-arm64.tar.gz"
+      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-darwin-arm64.zip"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-darwin-amd64.tar.gz"
+      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-darwin-amd64.zip"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-linux-arm64.tar.gz"
+      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-linux-arm64.zip"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-linux-amd64.tar.gz"
+      url "https://github.com/GITHUB_REPO/clouds/releases/download/v0.1.0/cloud-linux-amd64.zip"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   def install
-    binary = Dir["cloud-*"].first
+    binary = if File.exist?("clouds.app/Contents/Resources/clouds")
+      "clouds.app/Contents/Resources/clouds"
+    else
+      "clouds"
+    end
     odie "unexpected archive layout" if binary.nil?
     bin.install binary => "clouds"
   end

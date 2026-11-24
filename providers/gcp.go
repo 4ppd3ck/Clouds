@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/bigquery/v2"
 	"google.golang.org/api/cloudfunctions/v2"
 	"google.golang.org/api/compute/v1"
@@ -43,9 +44,19 @@ func NewGCP(opts cloud.Options) *GCP {
 // ID implements Impl.
 func (g *GCP) ID() string { return "gcp" }
 
-// Info implements Impl.
-func (g *GCP) Info(ctx context.Context) string {
-	return fmt.Sprintf("project=%s", orDefault(g.Project(ctx), "(unset)"))
+// CheckConnection reports local ADC/project configuration without exposing
+// credential data or making a cloud resource request.
+func (g *GCP) CheckConnection(ctx context.Context) ConnectionInfo {
+	project := g.Project(ctx)
+	creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	if err != nil {
+		return ConnectionInfo{Provider: "gcp", State: "setup", Summary: "ADC credentials not found", Detail: err.Error(), Next: "Sign in to create local ADC credentials, then restart Clouds to reload them.", Command: "gcloud auth application-default login"}
+	}
+	_ = creds // presence is enough here; service access and IAM are checked on fetch.
+	if project == "" {
+		return ConnectionInfo{Provider: "gcp", State: "setup", Summary: "credentials found; project is not set", Detail: "ADC credentials are available, but no Google Cloud project was resolved.", Next: "Set a project with --project or in the Clouds config file, then restart Clouds.", Command: "clouds --project YOUR_PROJECT_ID"}
+	}
+	return ConnectionInfo{Provider: "gcp", State: "ready", Summary: "ADC configured  project=" + project, Detail: "Application Default Credentials and a project are configured. Service access is checked when you browse each service."}
 }
 
 // Catalog implements Impl.
@@ -69,6 +80,9 @@ func (g *GCP) Catalog() cloud.Provider {
 
 // Project resolves the GCP project id (flag -> env -> metadata server).
 func (g *GCP) Project(ctx context.Context) string {
+	if g.opts.Project != "" {
+		return g.opts.Project
+	}
 	g.mu.Lock()
 	if g.project != "" {
 		p := g.project
@@ -240,7 +254,7 @@ func (g *GCP) fetchGCS(ctx context.Context, opts cloud.Options) ([]cloud.Resourc
 				},
 				Console: fmt.Sprintf("https://console.cloud.google.com/storage/browser/%s?project=%s", name, p),
 				Sub: func(ctx context.Context, opts cloud.Options) ([]cloud.Resource, error) {
-					return g.gcsObjects(ctx, name)
+					return g.gcsObjects(ctx, name, "")
 				},
 			})
 		}
@@ -251,16 +265,35 @@ func (g *GCP) fetchGCS(ctx context.Context, opts cloud.Options) ([]cloud.Resourc
 	return out, nil
 }
 
-func (g *GCP) gcsObjects(ctx context.Context, bucket string) ([]cloud.Resource, error) {
+func (g *GCP) gcsObjects(ctx context.Context, bucket, prefix string) ([]cloud.Resource, error) {
 	svc, err := g.storageSvc(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var out []cloud.Resource
-	if err := svc.Objects.List(bucket).Pages(ctx, func(page *storage.Objects) error {
+	if err := svc.Objects.List(bucket).Prefix(prefix).Delimiter("/").Pages(ctx, func(page *storage.Objects) error {
+		for _, childPrefix := range page.Prefixes {
+			if len(out) >= cloud.MaxRows {
+				return nil
+			}
+			name := strings.TrimPrefix(childPrefix, prefix)
+			folderPrefix := childPrefix
+			out = append(out, cloud.Resource{
+				Kind: "gcs/object", Name: name, ID: "0 B",
+				Fields:  []cloud.Field{{Key: "STORAGE", Value: "-"}, {Key: "MODIFIED", Value: "-"}},
+				Detail:  fmt.Sprintf("bucket: %s\nprefix: %s", bucket, folderPrefix),
+				Console: fmt.Sprintf("https://console.cloud.google.com/storage/browser/%s/%s", bucket, folderPrefix),
+				Sub: func(ctx context.Context, opts cloud.Options) ([]cloud.Resource, error) {
+					return g.gcsObjects(ctx, bucket, folderPrefix)
+				},
+			})
+		}
 		for _, o := range page.Items {
 			if len(out) >= cloud.MaxRows {
 				return nil
+			}
+			if strings.HasSuffix(o.Name, "/") {
+				continue
 			}
 			updated := "-"
 			if t, err := time.Parse(time.RFC3339, o.Updated); err == nil {
@@ -268,8 +301,9 @@ func (g *GCP) gcsObjects(ctx context.Context, bucket string) ([]cloud.Resource, 
 			}
 			size := cloud.HumanSize(int64(o.Size))
 			key := o.Name
+			name := strings.TrimPrefix(key, prefix)
 			out = append(out, cloud.Resource{
-				Kind: "gcs/object", Name: key, ID: size,
+				Kind: "gcs/object", Name: name, ID: size,
 				Fields: []cloud.Field{
 					{Key: "STORAGE", Value: o.StorageClass},
 					{Key: "MODIFIED", Value: updated},

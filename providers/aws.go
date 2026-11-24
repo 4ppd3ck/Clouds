@@ -36,8 +36,19 @@ import (
 // Impl is a concrete provider backend (AWS, GCP, demo variants).
 type Impl interface {
 	ID() string
-	Info(ctx context.Context) string
+	CheckConnection(ctx context.Context) ConnectionInfo
 	Catalog() cloud.Provider
+}
+
+// ConnectionInfo is safe-to-display provider state. It never contains tokens
+// or secret values.
+type ConnectionInfo struct {
+	Provider string
+	State    string
+	Summary  string
+	Detail   string
+	Next     string
+	Command  string
 }
 
 // BuildAll returns the provider backends selected by the options
@@ -91,17 +102,33 @@ func (a *AWS) region() string {
 	return a.cfg.Region
 }
 
-// Info implements Impl (header line for the TUI topbar).
-func (a *AWS) Info(ctx context.Context) string {
+// CheckConnection checks the credential chain and resolves the active AWS
+// identity without exposing credential values.
+func (a *AWS) CheckConnection(ctx context.Context) ConnectionInfo {
+	profile := a.opts.Profile
+	if profile == "" {
+		profile = os.Getenv("AWS_PROFILE")
+	}
+	if profile == "" {
+		profile = "default"
+	}
+	configCommand := "aws configure --profile " + profile
+	if a.initErr != nil {
+		return ConnectionInfo{Provider: "aws", State: "setup", Summary: "credentials could not be loaded", Detail: a.initErr.Error(), Next: "Check the selected AWS profile and shared config files.", Command: configCommand}
+	}
+	if _, err := a.cfg.Credentials.Retrieve(ctx); err != nil {
+		return ConnectionInfo{Provider: "aws", State: "setup", Summary: "credentials not found", Detail: "Credential lookup failed (credentials may also be expired): " + err.Error(), Next: "For IAM Identity Center, sign in to the selected SSO profile. For other profiles, configure credentials with the AWS CLI.", Command: "aws sso login --profile " + profile + "   (SSO)\n" + configCommand + "   (other profiles)"}
+	}
 	a.mu.Lock()
 	acct := a.account
 	a.mu.Unlock()
 	if acct == "" {
 		out, err := sts.NewFromConfig(a.cfg).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-		if err == nil && out.Account != nil {
+		if err != nil {
+			return ConnectionInfo{Provider: "aws", State: "warning", Summary: "credentials found; identity check failed", Detail: err.Error(), Next: "Check network access and profile permissions. Restart Clouds after changing credentials; press r for transient request failures.", Command: "aws sts get-caller-identity --profile " + profile}
+		}
+		if out.Account != nil {
 			acct = *out.Account
-		} else {
-			acct = "?"
 		}
 		a.mu.Lock()
 		a.account = acct
@@ -111,8 +138,7 @@ func (a *AWS) Info(ctx context.Context) string {
 	if a.opts.AllRegions {
 		region = "all"
 	}
-	return fmt.Sprintf("profile=%s account=%s region=%s",
-		orDefault(a.opts.Profile, "default"), acct, region)
+	return ConnectionInfo{Provider: "aws", State: "ready", Summary: fmt.Sprintf("profile=%s  account=%s  region=%s", profile, orDefault(acct, "unknown"), region), Detail: "AWS credentials are available and STS identified the active account."}
 }
 
 // Catalog implements Impl. Region-scoped services go through regionalFetch
@@ -326,36 +352,59 @@ func (a *AWS) fetchS3(ctx context.Context, opts cloud.Options) ([]cloud.Resource
 			},
 			Console: fmt.Sprintf("https://s3.console.aws.amazon.com/s3/buckets/%s?region=%s", name, a.region()),
 			Sub: func(ctx context.Context, opts cloud.Options) ([]cloud.Resource, error) {
-				return a.s3Objects(ctx, bucket)
+				return a.s3Objects(ctx, bucket, "")
 			},
 		})
 	}
 	return res, nil
 }
 
-func (a *AWS) s3Objects(ctx context.Context, bucket string) ([]cloud.Resource, error) {
+func (a *AWS) s3Objects(ctx context.Context, bucket, prefix string) ([]cloud.Resource, error) {
 	c := s3.NewFromConfig(a.cfg)
 	var out []cloud.Resource
-	p := s3.NewListObjectsV2Paginator(c, &s3.ListObjectsV2Input{Bucket: aws.String(bucket)})
+	p := s3.NewListObjectsV2Paginator(c, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket), Prefix: aws.String(prefix), Delimiter: aws.String("/"),
+	})
 	for p.HasMorePages() {
 		page, err := p.NextPage(ctx)
 		if err != nil {
 			return nil, err
+		}
+		for _, common := range page.CommonPrefixes {
+			if len(out) >= cloud.MaxRows {
+				return out, nil
+			}
+			childPrefix := aws.ToString(common.Prefix)
+			if childPrefix == "" {
+				continue
+			}
+			name := strings.TrimPrefix(childPrefix, prefix)
+			folderPrefix := childPrefix
+			out = append(out, cloud.Resource{
+				Kind: "s3/object", Name: name, ID: "0 B",
+				Fields:  []cloud.Field{{Key: "STORAGE", Value: "-"}, {Key: "MODIFIED", Value: "-"}},
+				Detail:  fmt.Sprintf("bucket: %s\nprefix: %s", bucket, folderPrefix),
+				Console: fmt.Sprintf("https://s3.console.aws.amazon.com/s3/buckets/%s?prefix=%s", bucket, folderPrefix),
+				Sub: func(ctx context.Context, opts cloud.Options) ([]cloud.Resource, error) {
+					return a.s3Objects(ctx, bucket, folderPrefix)
+				},
+				Download: a.makePrefixDownload(bucket, folderPrefix),
+			})
 		}
 		for _, o := range page.Contents {
 			if len(out) >= cloud.MaxRows {
 				return out, nil
 			}
 			key := aws.ToString(o.Key)
-			size := aws.ToInt64(o.Size)
-			var dl *cloud.Download
+			// S3 console-created folder marker objects are represented by the
+			// matching CommonPrefix row above.
 			if strings.HasSuffix(key, "/") {
-				dl = a.makePrefixDownload(bucket, key)
-			} else {
-				dl = a.makeDownload(bucket, key, size)
+				continue
 			}
+			size := aws.ToInt64(o.Size)
+			name := strings.TrimPrefix(key, prefix)
 			out = append(out, cloud.Resource{
-				Kind: "s3/object", Name: key, ID: cloud.HumanSize(size),
+				Kind: "s3/object", Name: name, ID: cloud.HumanSize(size),
 				Fields: []cloud.Field{
 					{Key: "STORAGE", Value: string(o.StorageClass)},
 					{Key: "MODIFIED", Value: cloud.Ago(aws.ToTime(o.LastModified))},
@@ -363,7 +412,7 @@ func (a *AWS) s3Objects(ctx context.Context, bucket string) ([]cloud.Resource, e
 				Detail: fmt.Sprintf("bucket:   %s\nkey:      %s\nsize:     %s\nmodified: %s",
 					bucket, key, cloud.HumanSize(size), cloud.FmtTS(aws.ToTime(o.LastModified))),
 				Console:  fmt.Sprintf("https://s3.console.aws.amazon.com/s3/buckets/%s?prefix=%s", bucket, key),
-				Download: dl,
+				Download: a.makeDownload(bucket, key, size),
 			})
 		}
 	}

@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"clouds/cloud"
 )
+
+type demoS3Object struct {
+	key, size string
+	days      int
+}
 
 // Demo providers implement the full UI against built-in sample data: no
 // credentials and no network. Downloads write small local files so the whole
@@ -20,9 +26,9 @@ func newDemoAWS() *DemoAWS { return &DemoAWS{} }
 // ID implements Impl.
 func (d *DemoAWS) ID() string { return "aws" }
 
-// Info implements Impl.
-func (d *DemoAWS) Info(ctx context.Context) string {
-	return "DEMO — sample data, no cloud calls"
+// CheckConnection implements Impl.
+func (d *DemoAWS) CheckConnection(ctx context.Context) ConnectionInfo {
+	return ConnectionInfo{Provider: "aws", State: "demo", Summary: "demo data; no credentials needed", Detail: "The demo catalog uses sample data and makes no AWS calls."}
 }
 
 // Catalog implements Impl.
@@ -104,44 +110,56 @@ func demoS3Buckets(ctx context.Context, opts cloud.Options) ([]cloud.Resource, e
 }
 
 func demoS3Objects(bucket string) ([]cloud.Resource, error) {
-	out := []cloud.Resource{{
-		Kind: "s3/object", Name: "backups/", ID: "0 B",
-		Fields: []cloud.Field{{Key: "STORAGE", Value: "-"}, {Key: "MODIFIED", Value: "5d"}},
-		Detail: fmt.Sprintf("bucket:   %s\nfolder marker — `g` downloads the whole prefix recursively", bucket),
-		Download: &cloud.Download{
-			Label: "s3 folder (demo)",
-			Run: func(ctx context.Context, opts cloud.Options, progress func(string)) (string, error) {
-				target := cloud.SafePath(opts.DownloadDir, bucket, "backups/db-2026-09-15.sql")
-				if err := os.MkdirAll(dirOf(target), 0o755); err != nil {
-					return "", err
-				}
-				progress("demo payload  backups/db-2026-09-15.sql")
-				time.Sleep(300 * time.Millisecond)
-				if err := os.WriteFile(target, []byte("demo content for "+bucket+"/backups/db-2026-09-15.sql\n"), 0o644); err != nil {
-					return "", err
-				}
-				return target, nil
-			},
-		},
-	}}
-	type obj struct {
-		key, size string
-		days      int
-	}
-	for _, o := range []obj{
+	return demoS3Prefix(bucket, "")
+}
+
+func demoS3Prefix(bucket, prefix string) ([]cloud.Resource, error) {
+	objects := []demoS3Object{
+		{"backups/db-2026-09-15.sql", "3.1 MiB", 5},
 		{"data/export-2026-09.csv", "1.8 MiB", 0},
 		{"data/export-2026-08.csv", "1.7 MiB", 30},
 		{"images/logo.png", "84 KiB", 143},
 		{"logs/app-2026-09-16.log", "12.4 MiB", 0},
 		{"readme.txt", "2 KiB", 365},
-	} {
+	}
+	var out []cloud.Resource
+	folders := map[string]bool{}
+	for _, o := range objects {
+		if !strings.HasPrefix(o.key, prefix) {
+			continue
+		}
 		o := o
+		relative := strings.TrimPrefix(o.key, prefix)
+		if slash := strings.IndexByte(relative, '/'); slash >= 0 {
+			folder := prefix + relative[:slash+1]
+			if folders[folder] {
+				continue
+			}
+			folders[folder] = true
+			folderName := relative[:slash+1]
+			folderPrefix := folder
+			out = append(out, cloud.Resource{
+				Kind: "s3/object", Name: folderName, ID: "0 B",
+				Fields: []cloud.Field{{Key: "STORAGE", Value: "-"}, {Key: "MODIFIED", Value: "-"}},
+				Detail: fmt.Sprintf("bucket: %s\nprefix: %s", bucket, folderPrefix),
+				Sub: func(ctx context.Context, opts cloud.Options) ([]cloud.Resource, error) {
+					return demoS3Prefix(bucket, folderPrefix)
+				},
+				Download: &cloud.Download{
+					Label: "s3 folder (demo)",
+					Run: func(ctx context.Context, opts cloud.Options, progress func(string)) (string, error) {
+						return demoDownloadPrefix(opts, bucket, folderPrefix, objects, progress)
+					},
+				},
+			})
+			continue
+		}
 		days := "1h"
 		if o.days > 0 {
 			days = agoLabel(o.days)
 		}
 		out = append(out, cloud.Resource{
-			Kind: "s3/object", Name: o.key, ID: o.size,
+			Kind: "s3/object", Name: relative, ID: o.size,
 			Fields:  []cloud.Field{{Key: "STORAGE", Value: "STANDARD"}, {Key: "MODIFIED", Value: days}},
 			Detail:  fmt.Sprintf("bucket:   %s\nkey:      %s\nsize:     %s", bucket, o.key, o.size),
 			Console: fmt.Sprintf("https://s3.console.aws.amazon.com/s3/buckets/%s?prefix=%s", bucket, o.key),
@@ -154,6 +172,21 @@ func demoS3Objects(bucket string) ([]cloud.Resource, error) {
 		})
 	}
 	return out, nil
+}
+
+func demoDownloadPrefix(opts cloud.Options, bucket, prefix string, objects []demoS3Object, progress func(string)) (string, error) {
+	var last string
+	for _, o := range objects {
+		if !strings.HasPrefix(o.key, prefix) {
+			continue
+		}
+		path, err := demoDownload(opts, bucket, o.key, progress)
+		if err != nil {
+			return "", err
+		}
+		last = path
+	}
+	return last, nil
 }
 
 func demoDownload(opts cloud.Options, bucket, key string, progress func(string)) (string, error) {
@@ -274,9 +307,9 @@ func newDemoGCP() *DemoGCP { return &DemoGCP{} }
 // ID implements Impl.
 func (d *DemoGCP) ID() string { return "gcp" }
 
-// Info implements Impl.
-func (d *DemoGCP) Info(ctx context.Context) string {
-	return "DEMO — sample data, no cloud calls"
+// CheckConnection implements Impl.
+func (d *DemoGCP) CheckConnection(ctx context.Context) ConnectionInfo {
+	return ConnectionInfo{Provider: "gcp", State: "demo", Summary: "demo data; no credentials needed", Detail: "The demo catalog uses sample data and makes no GCP calls."}
 }
 
 // Catalog implements Impl.
